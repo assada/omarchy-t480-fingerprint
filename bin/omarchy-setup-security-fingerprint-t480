@@ -1,0 +1,285 @@
+#!/bin/bash
+
+# Omarchy-compatible setup for the Synaptics 06cb:009a fingerprint reader.
+
+set -Eeuo pipefail
+
+readonly sensor_vendor="06cb"
+readonly sensor_product="009a"
+readonly target_user="${SUDO_USER:-${USER:-}}"
+
+green() { printf '\033[32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+red() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+
+sensor_path() {
+  local device vendor product
+  for device in /sys/bus/usb/devices/*; do
+    [[ -r "$device/idVendor" && -r "$device/idProduct" ]] || continue
+    read -r vendor <"$device/idVendor"
+    read -r product <"$device/idProduct"
+    if [[ "$vendor" == "$sensor_vendor" && "$product" == "$sensor_product" ]]; then
+      printf '%s\n' "$device"
+      return 0
+    fi
+  done
+  return 1
+}
+
+package_installed() {
+  pacman -Q "$1" &>/dev/null
+}
+
+backend_has_device() {
+  gdbus call --system \
+    --dest net.reactivated.Fprint \
+    --object-path /net/reactivated/Fprint/Manager \
+    --method net.reactivated.Fprint.Manager.GetDevices 2>/dev/null |
+    grep -q '/net/reactivated/Fprint/Device/'
+}
+
+wait_for_device() {
+  local max_attempts="${1:-90}" attempt
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    backend_has_device && return 0
+    sleep 1
+  done
+  return 1
+}
+
+reset_sensor_usb() {
+  sudo systemctl stop python3-validity.service
+  sudo usbreset "${sensor_vendor}:${sensor_product}"
+  sleep 2
+  sudo systemctl start python3-validity.service
+}
+
+has_enrolled_finger() {
+  fprintd-list "$target_user" 2>/dev/null |
+    grep -Eqi '(left|right)-(thumb|index|middle|ring|little)-finger'
+}
+
+show_status() {
+  local device="" package
+  local -a present=()
+  device=$(sensor_path 2>/dev/null || true)
+
+  printf 'Hardware:           '
+  if [[ -n "$device" ]]; then
+    printf '%s:%s at %s\n' "$sensor_vendor" "$sensor_product" "${device##*/}"
+    if [[ -r "$device/power/control" && -r "$device/power/runtime_status" ]]; then
+      printf 'USB power:          control=%s, runtime=%s\n' \
+        "$(<"$device/power/control")" "$(<"$device/power/runtime_status")"
+    fi
+  else
+    printf 'not found\n'
+  fi
+
+  printf 'Packages:           '
+  for package in fprintd fprintd-clients-git open-fprintd python-validity; do
+    package_installed "$package" && present+=("$package")
+  done
+  ((${#present[@]})) && printf '%s\n' "${present[*]}" || printf 'none\n'
+
+  printf 'Services:           open-fprintd=%s, python3-validity=%s\n' \
+    "$(systemctl is-active open-fprintd.service 2>/dev/null || true)" \
+    "$(systemctl is-active python3-validity.service 2>/dev/null || true)"
+  printf 'Backend device:     %s\n' "$(backend_has_device && printf available || printf unavailable)"
+  printf 'Enrolled finger:    %s\n' "$(has_enrolled_finger && printf yes || printf no)"
+  printf 'Omarchy PAM:        %s\n' \
+    "$(rg -q 'pam_fprintd\.so' /etc/pam.d/sudo /etc/pam.d/polkit-1 /etc/pam.d/omarchy-lock-fingerprint 2>/dev/null && printf configured || printf not-configured)"
+}
+
+confirm_sensor_repair() {
+  local answer=""
+  printf '\n'
+  yellow 'The driver is installed, but the reader did not initialize.'
+  printf '%s\n' \
+    'This unused reader can require a one-time firmware extraction and pairing' \
+    'procedure. The procedure resets only the fingerprint sensor database.' \
+    'It does not change the laptop firmware or disks.'
+  printf '\nRun the one-time sensor repair now? [y/N] '
+  read -r answer
+  [[ "$answer" == y || "$answer" == Y || "$answer" == yes || "$answer" == YES ]]
+}
+
+repair_sensor() {
+  local firmware_tool reset_tool
+  firmware_tool=$(command -v validity-sensors-firmware 2>/dev/null || true)
+  reset_tool=/usr/share/python-validity/playground/factory-reset.py
+
+  if [[ -z "$firmware_tool" || ! -f "$reset_tool" ]]; then
+    red 'The python-validity repair tools are missing.'
+    return 1
+  fi
+
+  sudo systemctl stop python3-validity.service
+  sudo usbreset "${sensor_vendor}:${sensor_product}"
+  sleep 2
+  if ! sudo "$firmware_tool"; then
+    sudo systemctl start python3-validity.service || true
+    red 'The firmware extraction failed.'
+    return 1
+  fi
+  if ! sudo python3 "$reset_tool"; then
+    sudo systemctl start python3-validity.service || true
+    red 'The sensor pairing procedure failed. The PAM configuration did not change.'
+    return 1
+  fi
+  sudo systemctl start python3-validity.service
+  wait_for_device 90
+}
+
+backup_pam() {
+  local backup_dir file name
+  backup_dir="/var/lib/omarchy-fingerprint-t480/pam-backup-$(date +%Y%m%d-%H%M%S)"
+  sudo install -d -m 700 "$backup_dir"
+  for file in /etc/pam.d/sudo /etc/pam.d/polkit-1 /etc/pam.d/omarchy-lock-fingerprint; do
+    name=${file##*/}
+    if [[ -f "$file" ]]; then
+      sudo cp --archive -- "$file" "$backup_dir/$name"
+    else
+      sudo touch "$backup_dir/$name.absent"
+    fi
+  done
+  printf 'PAM backup:         %s\n' "$backup_dir"
+}
+
+setup_pam_config() {
+  local fprintd_gate='auth      [success=1 default=ignore] pam_exec.so quiet /usr/bin/omarchy-hw-laptop-closed'
+
+  backup_pam
+
+  if ! grep -q 'pam_fprintd\.so' /etc/pam.d/sudo; then
+    sudo sed -i '1i auth      sufficient pam_fprintd.so' /etc/pam.d/sudo
+  fi
+  if ! grep -q 'omarchy-hw-laptop-closed' /etc/pam.d/sudo; then
+    sudo sed -i "/pam_fprintd\.so/i $fprintd_gate" /etc/pam.d/sudo
+  fi
+
+  if [[ -f /etc/pam.d/polkit-1 ]]; then
+    if ! grep -q 'pam_fprintd\.so' /etc/pam.d/polkit-1; then
+      sudo sed -i '1i auth      sufficient pam_fprintd.so' /etc/pam.d/polkit-1
+    fi
+    if ! grep -q 'omarchy-hw-laptop-closed' /etc/pam.d/polkit-1; then
+      sudo sed -i "/pam_fprintd\.so/i $fprintd_gate" /etc/pam.d/polkit-1
+    fi
+  else
+    printf '%s\n' \
+      "$fprintd_gate" \
+      'auth      sufficient pam_fprintd.so' \
+      'auth      required pam_unix.so' \
+      '' \
+      'account   required pam_unix.so' \
+      'password  required pam_unix.so' \
+      'session   required pam_unix.so' |
+      sudo tee /etc/pam.d/polkit-1 >/dev/null
+  fi
+
+  printf '%s\n' \
+    '#%PAM-1.0' \
+    'auth       required                    pam_fprintd.so' \
+    'account    include                     system-local-login' |
+    sudo tee /etc/pam.d/omarchy-lock-fingerprint >/dev/null
+}
+
+install_backend() {
+  green 'Installing the T480 fingerprint backend...'
+  sudo -v
+
+  if ! package_installed fprintd-clients-git ||
+    ! package_installed open-fprintd ||
+    ! package_installed python-validity; then
+    if package_installed fprintd; then
+      omarchy pkg drop fprintd
+    fi
+    omarchy pkg aur add fprintd-clients-git open-fprintd python-validity
+  else
+    green 'The compatible fingerprint packages are already installed.'
+  fi
+
+  # This one-shot unit restarts both daemons after resume. Do not start it here.
+  sudo systemctl enable python3-validity-suspend-hotfix.service
+  sudo systemctl enable python3-validity.service
+  sudo systemctl start open-fprintd.service python3-validity.service
+
+  if ! wait_for_device 90; then
+    yellow 'The reader did not initialize. Resetting its USB connection once.'
+    reset_sensor_usb
+  fi
+
+  if ! wait_for_device 90; then
+    if confirm_sensor_repair && repair_sensor; then
+      green 'The reader initialized after the one-time repair.'
+    else
+      red 'The reader is still unavailable. The PAM configuration did not change.'
+      printf '%s\n' 'Read the logs with: journalctl -b -u python3-validity -u open-fprintd'
+      exit 1
+    fi
+  fi
+}
+
+enroll_and_verify() {
+  if has_enrolled_finger; then
+    yellow 'An enrolled finger exists. Enrollment is not necessary.'
+  else
+    printf '\n%s\n' \
+      'Enroll your right index finger.' \
+      'Touch and reposition it on the reader until enrollment is complete.'
+    sudo fprintd-enroll "$target_user"
+  fi
+
+  printf '\n%s\n' 'Verify the enrolled finger once.'
+  fprintd-verify
+}
+
+main() {
+  case "${1:-}" in
+  --check)
+    show_status
+    exit 0
+    ;;
+  --help | -h)
+    printf '%s\n' \
+      'Usage: omarchy-setup-security-fingerprint-t480 [--check]' \
+      '' \
+      'Install the Synaptics 06cb:009a reader for Omarchy.'
+    exit 0
+    ;;
+  "") ;;
+  *)
+    red "Unknown argument: $1"
+    exit 2
+    ;;
+  esac
+
+  if [[ -z "$target_user" || "$target_user" == root ]]; then
+    red 'Run this installer as your normal desktop user.'
+    exit 1
+  fi
+  if ! sensor_path >/dev/null; then
+    red 'The Synaptics 06cb:009a reader was not found.'
+    exit 1
+  fi
+  for command in gdbus omarchy pacman rg usbreset yay; do
+    if ! command -v "$command" >/dev/null; then
+      red "The required command is missing: $command"
+      exit 1
+    fi
+  done
+
+  green 'Setting up ThinkPad T480 fingerprint authentication for Omarchy.'
+  install_backend
+  enroll_and_verify
+  setup_pam_config
+
+  printf '\n'
+  green 'Fingerprint authentication is configured.'
+  printf '%s\n' \
+    'It is available to sudo, polkit, and the Omarchy lock screen.' \
+    'The password remains available as a fallback.'
+  printf '\n'
+  show_status
+}
+
+main "$@"

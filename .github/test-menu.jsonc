@@ -1,0 +1,7 @@
+{
+  // The updater must keep this unrelated entry.
+  "personal.notes": {
+    "label": "Notes",
+    "action": "true",
+  },
+}

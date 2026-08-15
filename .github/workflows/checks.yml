@@ -1,0 +1,39 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+      - name: Run ShellCheck
+        run: shellcheck install.sh uninstall.sh bin/*
+      - name: Check Bash syntax
+        run: bash -n install.sh uninstall.sh bin/*
+
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+      - name: Compile the menu updater
+        run: python3 -m py_compile scripts/menu.py
+      - name: Test a JSONC menu update
+        run: |
+          work_dir=$(mktemp -d)
+          cp .github/test-menu.jsonc "$work_dir/menu.jsonc"
+          cp .github/test-menu.jsonc "$work_dir/original.jsonc"
+          python3 scripts/menu.py install "$work_dir/menu.jsonc" "$work_dir/state"
+          grep -q '"personal.notes"' "$work_dir/menu.jsonc"
+          grep -q '"setup.security.fingerprint"' "$work_dir/menu.jsonc"
+          python3 scripts/menu.py uninstall "$work_dir/menu.jsonc" "$work_dir/state"
+          cmp "$work_dir/original.jsonc" "$work_dir/menu.jsonc"

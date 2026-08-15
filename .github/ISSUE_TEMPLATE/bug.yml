@@ -1,0 +1,35 @@
+name: Reader problem
+description: Report a problem with the Synaptics 06cb:009a reader.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: checkboxes
+    attributes:
+      label: Hardware
+      options:
+        - label: My reader has the USB ID `06cb:009a`.
+          required: true
+  - type: textarea
+    attributes:
+      label: Problem
+      description: State what happened and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Status output
+      description: Paste the output of the `--check` command.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Omarchy version
+      description: Paste the output of `omarchy version`.
+      render: shell
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: Do not attach full `python-validity` debug logs. These logs can contain private pairing data.
