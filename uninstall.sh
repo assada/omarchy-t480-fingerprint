@@ -2,11 +2,12 @@
 
 set -Eeuo pipefail
 
-readonly version="1.0.0"
+readonly version="1.1.0"
 readonly source_ref="${OMARCHY_T480_FINGERPRINT_REF:-v${version}}"
 readonly raw_base="https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/${source_ref}"
 readonly setup_name="omarchy-setup-security-fingerprint-t480"
 readonly remove_name="omarchy-remove-security-fingerprint-t480"
+readonly sleep_hook_name="omarchy-t480-fingerprint-sleep"
 
 keep_auth=false
 temporary_dir=""
@@ -94,7 +95,8 @@ main() {
   rm -f -- \
     "$HOME/.local/bin/$setup_name" \
     "$HOME/.local/bin/$remove_name" \
-    "$HOME/.local/lib/omarchy-t480-fingerprint/menu.py"
+    "$HOME/.local/lib/omarchy-t480-fingerprint/menu.py" \
+    "$HOME/.local/lib/omarchy-t480-fingerprint/$sleep_hook_name"
   rmdir -- "$HOME/.local/lib/omarchy-t480-fingerprint" 2>/dev/null || true
 
   printf '%s\n' 'The local Omarchy fingerprint integration is removed.'

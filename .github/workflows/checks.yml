@@ -15,9 +15,11 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
       - name: Run ShellCheck
-        run: shellcheck install.sh uninstall.sh bin/*
+        run: shellcheck install.sh uninstall.sh bin/* systemd/* .github/test-sleep-hook.sh
       - name: Check Bash syntax
-        run: bash -n install.sh uninstall.sh bin/*
+        run: bash -n install.sh uninstall.sh bin/* systemd/* .github/test-sleep-hook.sh
+      - name: Test sleep recovery
+        run: .github/test-sleep-hook.sh
 
   python:
     name: Python

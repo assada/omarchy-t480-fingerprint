@@ -24,7 +24,7 @@ The command must show a Synaptics fingerprint reader.
 Run this command from an Omarchy terminal:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.0.0/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.0/install.sh)
 ```
 
 The installer asks for the `sudo` password. Then it asks you to enroll and verify your right index finger.
@@ -45,7 +45,13 @@ As a result, the normal Omarchy fingerprint setup stops before enrollment. This 
 - [`open-fprintd`](https://github.com/uunicorn/open-fprintd)
 - [`python-validity`](https://github.com/uunicorn/python-validity)
 
-The setup enables the `python-validity` service. It also enables the supplied service that restarts the backend after resume.
+The setup enables the `python-validity` service. It also installs a sleep recovery hook.
+
+The package resume service can start before the USB reader is ready. This race can leave the reader in an invalid state.
+
+The recovery hook stops the fingerprint services before sleep. After resume, it waits for the reader and starts each service in order.
+
+The hook completes before systemd unfreezes the user session. Thus, the Omarchy lock screen receives a ready fingerprint reader.
 
 Some readers remain busy after an interrupted first calibration. The setup resets only the matching `06cb:009a` USB device in this case.
 
@@ -87,6 +93,7 @@ The expected result contains these values:
 Backend device:     available
 Enrolled finger:    yes
 Omarchy PAM:        configured
+Resume recovery:    installed
 ```
 
 ## Remove fingerprint authentication
@@ -104,13 +111,13 @@ This action removes the community packages and the PAM entries. It keeps the PAM
 Run this command to remove the packages, PAM entries, local commands, and menu entries:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.0.0/uninstall.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.0/uninstall.sh)
 ```
 
 Run this command to keep fingerprint authentication:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.0.0/uninstall.sh) --keep-auth
+bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.0/uninstall.sh) --keep-auth
 ```
 
 ## Files
@@ -121,6 +128,7 @@ The installation adds these local files:
 ~/.local/bin/omarchy-setup-security-fingerprint-t480
 ~/.local/bin/omarchy-remove-security-fingerprint-t480
 ~/.local/lib/omarchy-t480-fingerprint/menu.py
+~/.local/lib/omarchy-t480-fingerprint/omarchy-t480-fingerprint-sleep
 ```
 
 It also updates this user configuration file:
@@ -130,6 +138,12 @@ It also updates this user configuration file:
 ```
 
 The menu update keeps other menu entries. It creates a backup before each change.
+
+The setup installs this system-sleep hook:
+
+```text
+/usr/lib/systemd/system-sleep/omarchy-t480-fingerprint-sleep
+```
 
 ## License
 
