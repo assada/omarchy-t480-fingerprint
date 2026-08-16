@@ -2,6 +2,8 @@
 
 set -Eeuo pipefail
 
+readonly sleep_hook_path="/usr/lib/systemd/system-sleep/omarchy-t480-fingerprint-sleep"
+
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 
 package_installed() {
@@ -34,9 +36,11 @@ main() {
   if ((${#packages[@]})); then
     omarchy pkg drop "${packages[@]}"
   fi
+  sudo rm -f -- "$sleep_hook_path"
 
   printf '%s\n' \
     'The fingerprint packages and PAM integration were removed.' \
+    'The sleep recovery hook was removed.' \
     'PAM backups remain in /var/lib/omarchy-fingerprint-t480/.' \
     'Fingerprints remain in the internal sensor database.'
 }

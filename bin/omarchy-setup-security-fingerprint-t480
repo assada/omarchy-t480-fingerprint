@@ -7,6 +7,8 @@ set -Eeuo pipefail
 readonly sensor_vendor="06cb"
 readonly sensor_product="009a"
 readonly target_user="${SUDO_USER:-${USER:-}}"
+readonly sleep_hook_name="omarchy-t480-fingerprint-sleep"
+readonly sleep_hook_target="/usr/lib/systemd/system-sleep/$sleep_hook_name"
 
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
@@ -84,10 +86,37 @@ show_status() {
   printf 'Services:           open-fprintd=%s, python3-validity=%s\n' \
     "$(systemctl is-active open-fprintd.service 2>/dev/null || true)" \
     "$(systemctl is-active python3-validity.service 2>/dev/null || true)"
+  printf 'Resume recovery:    %s\n' "$([[ -x "$sleep_hook_target" ]] && printf installed || printf not-installed)"
   printf 'Backend device:     %s\n' "$(backend_has_device && printf available || printf unavailable)"
   printf 'Enrolled finger:    %s\n' "$(has_enrolled_finger && printf yes || printf no)"
   printf 'Omarchy PAM:        %s\n' \
     "$(rg -q 'pam_fprintd\.so' /etc/pam.d/sudo /etc/pam.d/polkit-1 /etc/pam.d/omarchy-lock-fingerprint 2>/dev/null && printf configured || printf not-configured)"
+}
+
+sleep_hook_source() {
+  local installed_source script_directory repository_source
+  installed_source="$HOME/.local/lib/omarchy-t480-fingerprint/$sleep_hook_name"
+  script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  repository_source="$script_directory/../systemd/$sleep_hook_name"
+
+  if [[ -f "$installed_source" ]]; then
+    printf '%s\n' "$installed_source"
+  elif [[ -f "$repository_source" ]]; then
+    printf '%s\n' "$repository_source"
+  else
+    return 1
+  fi
+}
+
+install_resume_recovery() {
+  local source
+  if ! source=$(sleep_hook_source); then
+    red 'The resume recovery file is missing.'
+    exit 1
+  fi
+
+  sudo install -Dm755 "$source" "$sleep_hook_target"
+  sudo systemctl disable python3-validity-suspend-hotfix.service >/dev/null 2>&1 || true
 }
 
 confirm_sensor_repair() {
@@ -198,8 +227,7 @@ install_backend() {
     green 'The compatible fingerprint packages are already installed.'
   fi
 
-  # This one-shot unit restarts both daemons after resume. Do not start it here.
-  sudo systemctl enable python3-validity-suspend-hotfix.service
+  install_resume_recovery
   sudo systemctl enable python3-validity.service
   sudo systemctl start open-fprintd.service python3-validity.service
 
