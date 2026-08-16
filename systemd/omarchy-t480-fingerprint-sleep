@@ -8,6 +8,8 @@ readonly sensor_vendor="06cb"
 readonly sensor_product="009a"
 readonly sysfs_root="${OMARCHY_T480_FINGERPRINT_SYSFS_ROOT:-/sys/bus/usb/devices}"
 readonly state_directory="${OMARCHY_T480_FINGERPRINT_RUN_DIR:-/run/omarchy-t480-fingerprint}"
+readonly proc_root="${OMARCHY_T480_FINGERPRINT_PROC_ROOT:-/proc}"
+readonly kill_command="${OMARCHY_T480_FINGERPRINT_KILL_COMMAND:-kill}"
 readonly resume_marker="$state_directory/resume-backend"
 
 log_message() {
@@ -52,13 +54,38 @@ wait_for_backend() {
 }
 
 stop_backend() {
-  systemctl stop python3-validity.service || true
   systemctl stop open-fprintd.service || true
+  systemctl stop python3-validity.service || true
 }
 
 start_backend() {
   systemctl start open-fprintd.service || return 1
   systemctl start python3-validity.service || return 1
+}
+
+reset_quickshell_pam() {
+  local process pid parent_pid executable parent_executable
+  local reset_count=0
+
+  for process in "$proc_root"/[0-9]*; do
+    [[ -r "$process/status" && -L "$process/exe" ]] || continue
+    pid=${process##*/}
+    executable=$(readlink "$process/exe") || continue
+    [[ "${executable##*/}" == quickshell ]] || continue
+
+    parent_pid=$(awk '$1 == "PPid:" { print $2 }' "$process/status")
+    [[ "$parent_pid" =~ ^[0-9]+$ && -L "$proc_root/$parent_pid/exe" ]] || continue
+    parent_executable=$(readlink "$proc_root/$parent_pid/exe") || continue
+    [[ "$parent_executable" == "$executable" ]] || continue
+
+    if "$kill_command" -KILL "$pid" 2>/dev/null; then
+      ((reset_count += 1))
+    fi
+  done
+
+  if ((reset_count > 0)); then
+    log_message "Reset $reset_count stale Quickshell PAM session(s) after resume."
+  fi
 }
 
 before_sleep() {
@@ -97,6 +124,7 @@ after_sleep() {
     return 1
   fi
 
+  reset_quickshell_pam
   log_message "The fingerprint reader is ready after ${2:-sleep}."
 }
 
