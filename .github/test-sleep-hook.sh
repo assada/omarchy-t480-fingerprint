@@ -2,8 +2,10 @@
 
 set -Eeuo pipefail
 
-readonly repository_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-readonly test_directory=$(mktemp -d)
+repository_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+readonly repository_root
+test_directory=$(mktemp -d)
+readonly test_directory
 readonly fake_bin="$test_directory/bin"
 readonly fake_sysfs="$test_directory/sysfs"
 readonly fake_run="$test_directory/run"
