@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 
-readonly version="1.1.0"
+readonly version="1.1.1"
 readonly source_ref="${OMARCHY_T480_FINGERPRINT_REF:-v${version}}"
 readonly raw_base="https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/${source_ref}"
 readonly setup_name="omarchy-setup-security-fingerprint-t480"

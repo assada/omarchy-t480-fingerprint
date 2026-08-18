@@ -24,7 +24,7 @@ The command must show a Synaptics fingerprint reader.
 Run this command from an Omarchy terminal:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.0/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.1/install.sh)
 ```
 
 The installer asks for the `sudo` password. Then it asks you to enroll and verify your right index finger.
@@ -51,7 +51,9 @@ The package resume service can start before the USB reader is ready. This race c
 
 The recovery hook stops the fingerprint services before sleep. After resume, it waits for the reader and starts each service in order.
 
-The hook completes before systemd unfreezes the user session. Thus, the Omarchy lock screen receives a ready fingerprint reader.
+The lock screen can keep an old PAM session across sleep. This session does not connect to the new fingerprint backend.
+
+The hook resets this PAM session after the reader is ready. Omarchy then starts a new fingerprint scan when systemd unfreezes the user session.
 
 Some readers remain busy after an interrupted first calibration. The setup resets only the matching `06cb:009a` USB device in this case.
 
@@ -111,13 +113,13 @@ This action removes the community packages and the PAM entries. It keeps the PAM
 Run this command to remove the packages, PAM entries, local commands, and menu entries:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.0/uninstall.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.1/uninstall.sh)
 ```
 
 Run this command to keep fingerprint authentication:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.0/uninstall.sh) --keep-auth
+bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.1/uninstall.sh) --keep-auth
 ```
 
 ## Files
