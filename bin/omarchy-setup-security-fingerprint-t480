@@ -222,7 +222,9 @@ install_backend() {
     if package_installed fprintd; then
       omarchy pkg drop fprintd
     fi
-    omarchy pkg aur add fprintd-clients-git open-fprintd python-validity
+    sudo pacman -S --needed --noconfirm python-setuptools
+    PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH" \
+      omarchy pkg aur add fprintd-clients-git open-fprintd python-validity
   else
     green 'The compatible fingerprint packages are already installed.'
   fi
