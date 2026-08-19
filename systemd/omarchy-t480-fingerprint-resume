@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# Re-open the Synaptics 06cb:009a reader after suspend or hibernation.
+#
+# python-validity holds a TLS session with the sensor. A suspend resets the USB
+# device under that session, so the next verify fails inside libusb. The driver
+# reports such a failure as "verify-no-match", which the lock screen shows as an
+# unrecognized finger, and then it exits.
+#
+# open-fprintd publishes the repair call for this case: Manager.Resume() makes
+# python-validity reset the session and re-open the sensor in place. This keeps
+# live PAM claims intact, so a restart of the two services stays the last
+# resort. The unit that runs this script is ordered after the sleep target, so
+# every wait below happens after the resume is complete and delays nothing.
+
+set -u
+
+readonly sensor_vendor="06cb"
+readonly sensor_product="009a"
+readonly driver_service="python3-validity.service"
+readonly backend_service="open-fprintd.service"
+
+readonly sysfs_root="${OMARCHY_T480_FINGERPRINT_SYSFS_ROOT:-/sys/bus/usb/devices}"
+readonly sensor_attempts="${OMARCHY_T480_FINGERPRINT_SENSOR_ATTEMPTS:-60}"
+readonly backend_attempts="${OMARCHY_T480_FINGERPRINT_BACKEND_ATTEMPTS:-80}"
+readonly poll_interval="${OMARCHY_T480_FINGERPRINT_POLL_INTERVAL:-0.25}"
+readonly resume_timeout="${OMARCHY_T480_FINGERPRINT_RESUME_TIMEOUT:-30}"
+
+log_message() {
+  logger --tag omarchy-t480-fingerprint -- "$*"
+}
+
+sensor_is_present() {
+  local device vendor product
+  for device in "$sysfs_root"/*; do
+    [[ -r "$device/idVendor" && -r "$device/idProduct" ]] || continue
+    read -r vendor <"$device/idVendor"
+    read -r product <"$device/idProduct"
+    [[ "$vendor" == "$sensor_vendor" && "$product" == "$sensor_product" ]] && return 0
+  done
+  return 1
+}
+
+backend_has_device() {
+  gdbus call --system \
+    --dest net.reactivated.Fprint \
+    --object-path /net/reactivated/Fprint/Manager \
+    --method net.reactivated.Fprint.Manager.GetDevices 2>/dev/null |
+    grep -q '/net/reactivated/Fprint/Device/'
+}
+
+driver_is_running() {
+  systemctl is-active --quiet "$driver_service"
+}
+
+# The reader re-enumerates in a kernel work queue, so it can be absent for a
+# moment after the resume returns.
+wait_for() {
+  local check="$1" attempts="$2" attempt
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    "$check" && return 0
+    sleep "$poll_interval"
+  done
+  return 1
+}
+
+resume_sensor() {
+  gdbus call --system --timeout "$resume_timeout" \
+    --dest net.reactivated.Fprint \
+    --object-path /net/reactivated/Fprint/Manager \
+    --method net.reactivated.Fprint.Manager.Resume >/dev/null 2>&1
+}
+
+# A restart of open-fprintd drops every device object, so it also clears a claim
+# that a PAM session left behind and any state from an unfinished suspend.
+restart_backend() {
+  systemctl restart "$backend_service" "$driver_service" || true
+  wait_for backend_has_device "$backend_attempts"
+}
+
+main() {
+  if ! wait_for sensor_is_present "$sensor_attempts"; then
+    log_message "The fingerprint reader did not return after sleep."
+  fi
+
+  if ! driver_is_running; then
+    # The driver exits when a libusb call fails, and an interrupted verify
+    # across a suspend is exactly that failure.
+    log_message "The fingerprint driver is not running. Restarting the backend."
+    restart_backend
+  elif ! resume_sensor; then
+    log_message "The reader did not re-open. Restarting the backend."
+    restart_backend
+  fi
+
+  if backend_has_device; then
+    log_message "The fingerprint reader is ready after sleep."
+    return 0
+  fi
+
+  log_message "The fingerprint backend has no device after sleep." \
+    "Read the logs with: journalctl -b -u $driver_service -u $backend_service"
+  return 1
+}
+
+main "$@"

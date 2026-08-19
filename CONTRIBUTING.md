@@ -5,9 +5,9 @@ Use a pull request for each change. Keep each pull request limited to one proble
 Before you open a pull request, run these commands:
 
 ```bash
-bash -n install.sh uninstall.sh bin/* systemd/* .github/test-sleep-hook.sh
-shellcheck install.sh uninstall.sh bin/* systemd/* .github/test-sleep-hook.sh
-.github/test-sleep-hook.sh
+bash -n install.sh uninstall.sh bin/* systemd/omarchy-t480-fingerprint-resume .github/test-resume.sh
+shellcheck install.sh uninstall.sh bin/* systemd/omarchy-t480-fingerprint-resume .github/test-resume.sh
+.github/test-resume.sh
 python3 -m py_compile scripts/menu.py
 ```
 
