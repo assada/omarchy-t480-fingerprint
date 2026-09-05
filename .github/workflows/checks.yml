@@ -15,11 +15,17 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
       - name: Run ShellCheck
-        run: shellcheck install.sh uninstall.sh bin/* systemd/* .github/test-sleep-hook.sh
+        run: shellcheck install.sh uninstall.sh bin/* systemd/omarchy-t480-fingerprint-resume .github/test-resume.sh
       - name: Check Bash syntax
-        run: bash -n install.sh uninstall.sh bin/* systemd/* .github/test-sleep-hook.sh
-      - name: Test sleep recovery
-        run: .github/test-sleep-hook.sh
+        run: bash -n install.sh uninstall.sh bin/* systemd/omarchy-t480-fingerprint-resume .github/test-resume.sh
+      - name: Test resume recovery
+        run: .github/test-resume.sh
+      - name: Check the systemd unit
+        run: |
+          sudo install -Dm755 systemd/omarchy-t480-fingerprint-resume \
+            /usr/local/lib/omarchy-t480-fingerprint/omarchy-t480-fingerprint-resume
+          systemd-analyze verify --recursive-errors=no \
+            ./systemd/omarchy-t480-fingerprint-resume.service
 
   python:
     name: Python

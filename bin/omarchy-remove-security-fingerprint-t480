@@ -2,12 +2,25 @@
 
 set -Eeuo pipefail
 
-readonly sleep_hook_path="/usr/lib/systemd/system-sleep/omarchy-t480-fingerprint-sleep"
+readonly resume_script_path="/usr/local/lib/omarchy-t480-fingerprint/omarchy-t480-fingerprint-resume"
+readonly resume_unit_name="omarchy-t480-fingerprint-resume.service"
+readonly resume_unit_path="/etc/systemd/system/$resume_unit_name"
+readonly driver_dropin_path="/etc/systemd/system/python3-validity.service.d/omarchy-t480-restart.conf"
+readonly legacy_sleep_hook="/usr/lib/systemd/system-sleep/omarchy-t480-fingerprint-sleep"
 
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 
 package_installed() {
   pacman -Q "$1" &>/dev/null
+}
+
+remove_resume_recovery() {
+  sudo systemctl disable --now "$resume_unit_name" >/dev/null 2>&1 || true
+  sudo rm -f -- "$resume_unit_path" "$resume_script_path" "$driver_dropin_path" "$legacy_sleep_hook"
+  sudo rmdir -- \
+    /usr/local/lib/omarchy-t480-fingerprint \
+    /etc/systemd/system/python3-validity.service.d 2>/dev/null || true
+  sudo systemctl daemon-reload
 }
 
 remove_pam_config() {
@@ -29,6 +42,7 @@ main() {
   green 'Removing ThinkPad T480 fingerprint authentication from Omarchy.'
   sudo -v
   remove_pam_config
+  remove_resume_recovery
 
   for package in python-validity open-fprintd fprintd-clients-git; do
     package_installed "$package" && packages+=("$package")
@@ -36,11 +50,10 @@ main() {
   if ((${#packages[@]})); then
     omarchy pkg drop "${packages[@]}"
   fi
-  sudo rm -f -- "$sleep_hook_path"
 
   printf '%s\n' \
     'The fingerprint packages and PAM integration were removed.' \
-    'The sleep recovery hook was removed.' \
+    'The resume recovery unit was removed.' \
     'PAM backups remain in /var/lib/omarchy-fingerprint-t480/.' \
     'Fingerprints remain in the internal sensor database.'
 }

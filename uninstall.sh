@@ -2,12 +2,19 @@
 
 set -Eeuo pipefail
 
-readonly version="1.1.0"
+readonly version="1.2.0"
 readonly source_ref="${OMARCHY_T480_FINGERPRINT_REF:-v${version}}"
 readonly raw_base="https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/${source_ref}"
 readonly setup_name="omarchy-setup-security-fingerprint-t480"
 readonly remove_name="omarchy-remove-security-fingerprint-t480"
-readonly sleep_hook_name="omarchy-t480-fingerprint-sleep"
+readonly -a library_files=(
+  "menu.py"
+  "omarchy-t480-fingerprint-resume"
+  "omarchy-t480-fingerprint-resume.service"
+  "python3-validity-restart.conf"
+  # Releases before 1.2.0 shipped a system-sleep hook instead of a resume unit.
+  "omarchy-t480-fingerprint-sleep"
+)
 
 keep_auth=false
 temporary_dir=""
@@ -50,7 +57,7 @@ get_helper() {
 }
 
 main() {
-  local menu_file state_dir menu_helper remove_helper
+  local menu_file state_dir menu_helper remove_helper library_file
 
   case "${1:-}" in
   --keep-auth) keep_auth=true ;;
@@ -94,9 +101,10 @@ main() {
 
   rm -f -- \
     "$HOME/.local/bin/$setup_name" \
-    "$HOME/.local/bin/$remove_name" \
-    "$HOME/.local/lib/omarchy-t480-fingerprint/menu.py" \
-    "$HOME/.local/lib/omarchy-t480-fingerprint/$sleep_hook_name"
+    "$HOME/.local/bin/$remove_name"
+  for library_file in "${library_files[@]}"; do
+    rm -f -- "$HOME/.local/lib/omarchy-t480-fingerprint/$library_file"
+  done
   rmdir -- "$HOME/.local/lib/omarchy-t480-fingerprint" 2>/dev/null || true
 
   printf '%s\n' 'The local Omarchy fingerprint integration is removed.'

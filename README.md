@@ -24,7 +24,7 @@ The command must show a Synaptics fingerprint reader.
 Run this command from an Omarchy terminal:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.1/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.2.0/install.sh)
 ```
 
 The installer asks for the `sudo` password. Then it asks you to enroll and verify your right index finger.
@@ -45,21 +45,50 @@ As a result, the normal Omarchy fingerprint setup stops before enrollment. This 
 - [`open-fprintd`](https://github.com/uunicorn/open-fprintd)
 - [`python-validity`](https://github.com/uunicorn/python-validity)
 
-The setup enables the `python-validity` service. It also installs a sleep recovery hook.
-
-The package resume service can start before the USB reader is ready. This race can leave the reader in an invalid state.
-
-The recovery hook stops the fingerprint services before sleep. After resume, it waits for the reader and starts each service in order.
-
-The lock screen can keep an old PAM session across sleep. This session does not connect to the new fingerprint backend.
-
-The hook resets this PAM session after the reader is ready. Omarchy then starts a new fingerprint scan when systemd unfreezes the user session.
+The setup enables the `python-validity` service. It also installs the resume recovery described below.
 
 Some readers remain busy after an interrupted first calibration. The setup resets only the matching `06cb:009a` USB device in this case.
 
 If the reader still does not start, the setup offers a one-time repair. This repair extracts the Lenovo firmware and pairs the reader.
 
 CAUTION: The one-time repair erases the internal fingerprint database. It does not change the laptop firmware or disk data.
+
+## Sleep and resume
+
+`python-validity` keeps a TLS session with the sensor. A suspend resets the USB device under that session, so the next verify fails inside `libusb`.
+
+The driver reports that failure as a finger that does not match, and then it exits. The lock screen shows an unrecognized finger for a reader that is no longer there. This is the reason the reader worked after some resumes and not after others.
+
+`open-fprintd` publishes the repair call for this case. `Manager.Resume()` makes `python-validity` reset the session and re-open the sensor in place. A live PAM session keeps working, because no service restarts.
+
+After each resume, `omarchy-t480-fingerprint-resume.service` runs these steps:
+
+1. It waits for the `06cb:009a` device to return to the USB bus.
+2. It calls `Manager.Resume()`.
+3. It restarts `open-fprintd` and `python3-validity` only when the driver is gone or the sensor did not re-open.
+
+The unit is ordered after the sleep targets, so each wait happens once the resume is complete. A script in `/usr/lib/systemd/system-sleep` cannot do this, because `systemd-sleep` waits for every hook before it finishes the resume.
+
+The driver exits with status `0` when a libusb call fails, so the packaged `Restart=on-failure` never brings it back. The setup adds this drop-in, which makes systemd the recovery path:
+
+```text
+/etc/systemd/system/python3-validity.service.d/omarchy-t480-restart.conf
+```
+
+The setup also disables three competing mechanisms:
+
+- `python3-validity-suspend-hotfix.service` restarts both services after every resume, which drops the claim of a live PAM session.
+- `open-fprintd-suspend.service` and `open-fprintd-resume.service` carry no ordering against the suspend itself, so their calls can land after the resume unit already repaired the reader.
+
+Read the recovery log with this command:
+
+```bash
+journalctl -b -u omarchy-t480-fingerprint-resume
+```
+
+### Known limit
+
+A verify that is in flight when the machine suspends still fails once. Omarchy starts a new fingerprint scan by itself, so the next touch works. The lock screen part of this problem is not specific to this reader, and fixes for it are proposed upstream in [basecamp/omarchy#7158](https://github.com/basecamp/omarchy/pull/7158) and [basecamp/omarchy#7179](https://github.com/basecamp/omarchy/pull/7179).
 
 ## Authentication changes
 
@@ -92,10 +121,11 @@ Run this command without `sudo`:
 The expected result contains these values:
 
 ```text
+Resume recovery:    installed
+Driver restart:     configured
 Backend device:     available
 Enrolled finger:    yes
 Omarchy PAM:        configured
-Resume recovery:    installed
 ```
 
 ## Remove fingerprint authentication
@@ -106,20 +136,20 @@ Use this menu path:
 Remove > Security > Fingerprint
 ```
 
-This action removes the community packages and the PAM entries. It keeps the PAM backups and internal fingerprint records.
+This action removes the community packages, the PAM entries, and the resume recovery. It keeps the PAM backups and internal fingerprint records.
 
 ## Remove this integration
 
 Run this command to remove the packages, PAM entries, local commands, and menu entries:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.1/uninstall.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.2.0/uninstall.sh)
 ```
 
 Run this command to keep fingerprint authentication:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.1.1/uninstall.sh) --keep-auth
+bash <(curl -fsSL https://raw.githubusercontent.com/assada/omarchy-t480-fingerprint/v1.2.0/uninstall.sh) --keep-auth
 ```
 
 ## Files
@@ -130,7 +160,9 @@ The installation adds these local files:
 ~/.local/bin/omarchy-setup-security-fingerprint-t480
 ~/.local/bin/omarchy-remove-security-fingerprint-t480
 ~/.local/lib/omarchy-t480-fingerprint/menu.py
-~/.local/lib/omarchy-t480-fingerprint/omarchy-t480-fingerprint-sleep
+~/.local/lib/omarchy-t480-fingerprint/omarchy-t480-fingerprint-resume
+~/.local/lib/omarchy-t480-fingerprint/omarchy-t480-fingerprint-resume.service
+~/.local/lib/omarchy-t480-fingerprint/python3-validity-restart.conf
 ```
 
 It also updates this user configuration file:
@@ -141,11 +173,16 @@ It also updates this user configuration file:
 
 The menu update keeps other menu entries. It creates a backup before each change.
 
-The setup installs this system-sleep hook:
+The setup installs these system files:
 
 ```text
-/usr/lib/systemd/system-sleep/omarchy-t480-fingerprint-sleep
+/usr/local/lib/omarchy-t480-fingerprint/omarchy-t480-fingerprint-resume
+/etc/systemd/system/omarchy-t480-fingerprint-resume.service
+/etc/systemd/system/python3-validity.service.d/omarchy-t480-restart.conf
 ```
+
+An upgrade from a release before 1.2.0 removes the old hook at
+`/usr/lib/systemd/system-sleep/omarchy-t480-fingerprint-sleep`.
 
 ## License
 

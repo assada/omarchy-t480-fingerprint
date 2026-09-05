@@ -7,8 +7,13 @@ set -Eeuo pipefail
 readonly sensor_vendor="06cb"
 readonly sensor_product="009a"
 readonly target_user="${SUDO_USER:-${USER:-}}"
-readonly sleep_hook_name="omarchy-t480-fingerprint-sleep"
-readonly sleep_hook_target="/usr/lib/systemd/system-sleep/$sleep_hook_name"
+readonly resume_script_name="omarchy-t480-fingerprint-resume"
+readonly resume_unit_name="omarchy-t480-fingerprint-resume.service"
+readonly driver_dropin_name="python3-validity-restart.conf"
+readonly resume_script_target="/usr/local/lib/omarchy-t480-fingerprint/$resume_script_name"
+readonly resume_unit_target="/etc/systemd/system/$resume_unit_name"
+readonly driver_dropin_target="/etc/systemd/system/python3-validity.service.d/omarchy-t480-restart.conf"
+readonly legacy_sleep_hook="/usr/lib/systemd/system-sleep/omarchy-t480-fingerprint-sleep"
 
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
@@ -86,18 +91,19 @@ show_status() {
   printf 'Services:           open-fprintd=%s, python3-validity=%s\n' \
     "$(systemctl is-active open-fprintd.service 2>/dev/null || true)" \
     "$(systemctl is-active python3-validity.service 2>/dev/null || true)"
-  printf 'Resume recovery:    %s\n' "$([[ -x "$sleep_hook_target" ]] && printf installed || printf not-installed)"
+  printf 'Resume recovery:    %s\n' "$(resume_recovery_state)"
+  printf 'Driver restart:     %s\n' "$(driver_restart_state)"
   printf 'Backend device:     %s\n' "$(backend_has_device && printf available || printf unavailable)"
   printf 'Enrolled finger:    %s\n' "$(has_enrolled_finger && printf yes || printf no)"
   printf 'Omarchy PAM:        %s\n' \
     "$(rg -q 'pam_fprintd\.so' /etc/pam.d/sudo /etc/pam.d/polkit-1 /etc/pam.d/omarchy-lock-fingerprint 2>/dev/null && printf configured || printf not-configured)"
 }
 
-sleep_hook_source() {
-  local installed_source script_directory repository_source
-  installed_source="$HOME/.local/lib/omarchy-t480-fingerprint/$sleep_hook_name"
+recovery_source() {
+  local name="$1" installed_source script_directory repository_source
+  installed_source="$HOME/.local/lib/omarchy-t480-fingerprint/$name"
   script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-  repository_source="$script_directory/../systemd/$sleep_hook_name"
+  repository_source="$script_directory/../systemd/$name"
 
   if [[ -f "$installed_source" ]]; then
     printf '%s\n' "$installed_source"
@@ -109,14 +115,57 @@ sleep_hook_source() {
 }
 
 install_resume_recovery() {
-  local source
-  if ! source=$(sleep_hook_source); then
-    red 'The resume recovery file is missing.'
+  local resume_script resume_unit driver_dropin
+
+  if ! resume_script=$(recovery_source "$resume_script_name") ||
+    ! resume_unit=$(recovery_source "$resume_unit_name") ||
+    ! driver_dropin=$(recovery_source "$driver_dropin_name"); then
+    red 'The resume recovery files are missing.'
     exit 1
   fi
 
-  sudo install -Dm755 "$source" "$sleep_hook_target"
-  sudo systemctl disable python3-validity-suspend-hotfix.service >/dev/null 2>&1 || true
+  sudo install -Dm755 "$resume_script" "$resume_script_target"
+  sudo install -Dm644 "$resume_unit" "$resume_unit_target"
+  sudo install -Dm644 "$driver_dropin" "$driver_dropin_target"
+
+  # One recovery path only.
+  #
+  # The packaged hotfix restarts both services after every resume, which drops
+  # the claim of a live PAM session.
+  #
+  # open-fprintd-suspend carries no ordering against the suspend itself, so its
+  # Suspend() call can land after the resume, which parks the backend until the
+  # next sleep. open-fprintd-resume has no ordering against the unit installed
+  # above either, and two concurrent re-opens race on the same sensor.
+  sudo rm -f -- "$legacy_sleep_hook"
+  sudo systemctl disable --now python3-validity-suspend-hotfix.service >/dev/null 2>&1 || true
+  sudo systemctl disable open-fprintd-suspend.service open-fprintd-resume.service >/dev/null 2>&1 || true
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable "$resume_unit_name" >/dev/null
+}
+
+resume_recovery_state() {
+  local -a missing=()
+
+  [[ -x "$resume_script_target" ]] || missing+=(script)
+  [[ -f "$resume_unit_target" ]] || missing+=(unit)
+  systemctl is-enabled --quiet "$resume_unit_name" 2>/dev/null || missing+=(disabled)
+
+  if ((${#missing[@]})); then
+    printf 'not-installed (%s)\n' "${missing[*]}"
+  else
+    printf 'installed\n'
+  fi
+}
+
+driver_restart_state() {
+  if [[ -f "$driver_dropin_target" ]] &&
+    [[ "$(systemctl show -p Restart --value python3-validity.service 2>/dev/null)" == always ]]; then
+    printf 'configured\n'
+  else
+    printf 'not-configured\n'
+  fi
 }
 
 confirm_sensor_repair() {
